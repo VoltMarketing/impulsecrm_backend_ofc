@@ -36,7 +36,9 @@ async function call(tenant, path, { method = 'GET', body, accept } = {}) {
 
 /** URL que o WAHA deve chamar quando chegar uma mensagem */
 export function webhookUrl(tenant) {
-  const pub = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+  // WEBHOOK_BASE_URL = endereço interno do CRM na rede do EasyPanel (ex.: http://waha_impulse_crm:3000).
+  // Mais confiável que o domínio público quando WAHA e CRM estão no mesmo servidor.
+  const pub = (process.env.WEBHOOK_BASE_URL || process.env.PUBLIC_URL || '').replace(/\/$/, '');
   return `${pub}/api/webhooks/waha/${tenant.id}?token=${tenant.webhook_token}`;
 }
 
@@ -64,6 +66,15 @@ export async function ensureWebhook(tenant, existing) {
     body: { name, config: { ...cfg, webhooks: [...others, ours] } }
   });
   console.log(`[waha] webhook do CRM cadastrado na sessão "${name}" -> ${ours.url}`);
+  // Reinicia a sessão para o WAHA passar a usar o webhook novo (mantém o login do WhatsApp)
+  if (String(info.status || '').toUpperCase() === 'WORKING') {
+    try {
+      await call(tenant, `/api/sessions/${name}/restart`, { method: 'POST' });
+      console.log(`[waha] sessão "${name}" reiniciada para aplicar o webhook`);
+    } catch (e) {
+      console.error('[waha] não consegui reiniciar a sessão:', e.message);
+    }
+  }
   return true;
 }
 
