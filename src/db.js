@@ -37,6 +37,27 @@ export async function initDb() {
     );
     await q('INSERT INTO settings (tenant_id) VALUES ($1) ON CONFLICT DO NOTHING', [t.rows[0].id]);
     console.log(`[db] tenant "${slug}" criado (id ${t.rows[0].id}). webhook_token=${token}`);
+  } else {
+    // As variáveis do EasyPanel mandam: se mudar WAHA_SESSION, WAHA_URL etc. e
+    // der Deploy, o tenant principal é atualizado sozinho.
+    await q(
+      `UPDATE tenants SET
+         name            = COALESCE(NULLIF($2,''), name),
+         waha_url        = COALESCE(NULLIF($3,''), waha_url),
+         waha_api_key    = COALESCE(NULLIF($4,''), waha_api_key),
+         waha_session    = COALESCE(NULLIF($5,''), waha_session),
+         n8n_webhook_url = COALESCE(NULLIF($6,''), n8n_webhook_url)
+       WHERE slug = $1`,
+      [
+        slug,
+        process.env.DEFAULT_TENANT_NAME || '',
+        process.env.WAHA_URL || '',
+        process.env.WAHA_API_KEY || '',
+        process.env.WAHA_SESSION || '',
+        process.env.N8N_WEBHOOK_URL || ''
+      ]
+    );
+    console.log(`[db] tenant "${slug}" sincronizado com as variáveis (sessão: ${process.env.WAHA_SESSION || '-'})`);
   }
 }
 
