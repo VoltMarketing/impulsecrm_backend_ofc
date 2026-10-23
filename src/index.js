@@ -3,7 +3,8 @@ import cors from 'cors';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { initDb } from './db.js';
+import { initDb, q } from './db.js';
+import { ensureWebhook } from './waha.js';
 import routes from './routes.js';
 import webhook from './webhook.js';
 
@@ -47,8 +48,27 @@ app.use((err, _req, res, _next) => {
 });
 
 const port = Number(process.env.PORT) || 3000;
+
+/** Ao iniciar, garante que cada WAHA conectado sabe avisar o CRM */
+async function syncWebhooks() {
+  if (!process.env.PUBLIC_URL) {
+    console.error('[waha] PUBLIC_URL vazio: o WAHA não tem para onde mandar as mensagens');
+    return;
+  }
+  const { rows } = await q("SELECT * FROM tenants WHERE active AND waha_url <> ''");
+  for (const t of rows) {
+    try {
+      await ensureWebhook(t);
+    } catch (e) {
+      console.error(`[waha] tenant ${t.id}: não consegui cadastrar o webhook (${e.message})`);
+    }
+  }
+}
 initDb()
-  .then(() => app.listen(port, () => console.log(`Impulse CRM API na porta ${port}`)))
+  .then(() => {
+    app.listen(port, () => console.log(`Impulse CRM API na porta ${port}`));
+    syncWebhooks();
+  })
   .catch((e) => {
     console.error('Falha ao iniciar o banco:', e);
     process.exit(1);

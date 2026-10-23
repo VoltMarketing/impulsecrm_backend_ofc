@@ -15,15 +15,17 @@ const ACK = { 1: 'sent', 2: 'delivered', 3: 'read', 4: 'read' };
 router.post('/waha/:tenantId', async (req, res) => {
   const tenant = await getTenant(req.params.tenantId);
   if (!tenant || req.query.token !== tenant.webhook_token) {
+    console.error(`[webhook] recusado: tenant ${req.params.tenantId} com token inválido`);
     return res.status(401).json({ error: 'token inválido' });
   }
+  console.log(`[webhook] ${req.body?.event || '?'} recebido (tenant ${tenant.id})`);
   // Responde rápido: o WAHA não deve esperar o processamento.
   res.json({ ok: true });
 
   try {
     await handle(tenant, req.body || {});
   } catch (e) {
-    console.error('[webhook]', e.message);
+    console.error('[webhook] erro ao processar:', e.message);
   }
 });
 

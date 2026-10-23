@@ -40,16 +40,36 @@ export function webhookUrl(tenant) {
   return `${pub}/api/webhooks/waha/${tenant.id}?token=${tenant.webhook_token}`;
 }
 
-/** Cria (ou atualiza) a sessão já com o webhook apontando para o CRM.
- *  Se a sessão já existir (ex.: criada pelo n8n), MANTÉM os webhooks que já
- *  estavam lá e só acrescenta o do CRM. */
-export async function ensureSession(tenant) {
+function isOurs(w) {
+  return String((w && w.url) || '').includes('/api/webhooks/waha/');
+}
+
+/** Garante que a sessão tem o webhook do CRM, mantendo os que já existem (n8n).
+ *  Só mexe no WAHA se o webhook estiver faltando ou desatualizado. */
+export async function ensureWebhook(tenant, existing) {
   const name = tenant.waha_session;
   const ours = {
     url: webhookUrl(tenant),
     events: ['message', 'message.any', 'message.ack', 'session.status']
   };
+  const info = existing || (await call(tenant, `/api/sessions/${name}`));
+  const cfg = (info && info.config) || {};
+  const hooks = cfg.webhooks || [];
+  const current = hooks.find(isOurs);
+  if (current && current.url === ours.url) return false; // já está certo
 
+  const others = hooks.filter((w) => !isOurs(w));
+  await call(tenant, `/api/sessions/${name}`, {
+    method: 'PUT',
+    body: { name, config: { ...cfg, webhooks: [...others, ours] } }
+  });
+  console.log(`[waha] webhook do CRM cadastrado na sessão "${name}" -> ${ours.url}`);
+  return true;
+}
+
+/** Cria (ou atualiza) a sessão já com o webhook apontando para o CRM. */
+export async function ensureSession(tenant) {
+  const name = tenant.waha_session;
   let existing = null;
   try {
     existing = await call(tenant, `/api/sessions/${name}`);
@@ -62,20 +82,19 @@ export async function ensureSession(tenant) {
   if (!existing) {
     await call(tenant, '/api/sessions', {
       method: 'POST',
-      body: { name, start: true, config: { webhooks: [ours] } }
+      body: {
+        name,
+        start: true,
+        config: { webhooks: [{ url: webhookUrl(tenant), events: ['message', 'message.any', 'message.ack', 'session.status'] }] }
+      }
     });
     return;
   }
 
-  const cfg = existing.config || {};
-  const others = (cfg.webhooks || []).filter((w) => !String(w.url || '').includes('/api/webhooks/waha/'));
   try {
-    await call(tenant, `/api/sessions/${name}`, {
-      method: 'PUT',
-      body: { name, config: { ...cfg, webhooks: [...others, ours] } }
-    });
+    await ensureWebhook(tenant, existing);
   } catch (e) {
-    console.error('[waha] não consegui atualizar o webhook:', e.message);
+    console.error('[waha] não consegui cadastrar o webhook:', e.message);
   }
 
   const st = String(existing.status || '').toUpperCase();
