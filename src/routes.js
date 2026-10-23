@@ -234,7 +234,9 @@ router.get('/logs', requireAuth, async (req, res) => {
 
 router.get('/whatsapp/status', requireAuth, async (req, res) => {
   const tenant = await getTenant(req.tenantId);
-  res.json(await waha.statusPayload(tenant));
+  const payload = await waha.statusPayload(tenant);
+  if (payload.status === 'connecting') waha.watchSession(tenant, emit);
+  res.json(payload);
 });
 
 router.post('/whatsapp/connect', requireAuth, async (req, res) => {
@@ -243,12 +245,26 @@ router.post('/whatsapp/connect', requireAuth, async (req, res) => {
   try {
     await waha.ensureSession(tenant);
   } catch (e) {
+    console.error('[whatsapp/connect]', e.message);
     return res.status(502).json({ error: e.message });
   }
-  // Dá um tempo para o WAHA gerar o QR
-  await new Promise((r) => setTimeout(r, 1500));
-  const payload = await waha.statusPayload(tenant);
   await logEvent(tenant.id, 'Sistema', 'Sessão do WhatsApp iniciada');
+
+  // Espera o WAHA gerar o QR (até ~15s) antes de responder
+  let payload = null;
+  for (let i = 0; i < 10; i++) {
+    payload = await waha.statusPayload(tenant);
+    if (payload.qr || payload.status === 'connected' || payload.raw === 'FAILED') break;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  if (payload.raw === 'FAILED') {
+    return res.status(502).json({ error: 'O WAHA não conseguiu iniciar a sessão. Veja os logs do serviço waha.' });
+  }
+  if (payload.status !== 'connected') {
+    // Mantém o QR atualizado na tela até o celular ler
+    payload.status = 'connecting';
+    waha.watchSession(tenant, emit);
+  }
   emit(tenant.id, payload);
   res.json(payload);
 });

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { q, getTenant } from './db.js';
 import { emit } from './events.js';
 import { serializeLead, serializeMessage, findOrCreateLeadByChat, logEvent, touchLead } from './repo.js';
-import { mapStatus, getQr } from './waha.js';
+import { statusPayload, watchSession, stopWatch } from './waha.js';
 
 const router = Router();
 
@@ -32,14 +32,10 @@ async function handle(tenant, event) {
   const p = event.payload || {};
 
   if (type === 'session.status') {
-    const status = mapStatus(p.status);
-    emit(tenant.id, {
-      type: 'whatsapp.status',
-      status,
-      qr: status === 'connecting' ? await getQr(tenant) : null,
-      phone: '',
-      name: ''
-    });
+    const payload = await statusPayload(tenant);
+    emit(tenant.id, payload);
+    if (payload.status === 'connecting') watchSession(tenant, emit);
+    else stopWatch(tenant.id);
     await logEvent(tenant.id, 'Sistema', `Sessão do WhatsApp: ${p.status}`);
     return;
   }
