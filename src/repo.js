@@ -71,26 +71,28 @@ export async function logEvent(tenantId, who, action) {
   return rows[0];
 }
 
-/** Acha o lead pelo chatId, ou cria um novo (entrada automática do WhatsApp) */
-export async function findOrCreateLeadByChat(tenant, chatId, pushName) {
+/** Acha o lead pelo chatId, ou cria um novo (entrada automática do WhatsApp).
+ *  À prova de corrida: se dois eventos chegarem juntos, só um lead é criado. */
+export async function findOrCreateLeadByChat(tenant, chatId, pushName, phone) {
   const tenantId = tenant.id;
-  const { rows: found } = await q(
-    'SELECT * FROM leads WHERE tenant_id = $1 AND chat_id = $2',
-    [tenantId, chatId]
-  );
+  const find = () => q('SELECT * FROM leads WHERE tenant_id = $1 AND chat_id = $2', [tenantId, chatId]);
+  const { rows: found } = await find();
   if (found.length) return { lead: found[0], created: false };
 
   const { rows: st } = await q('SELECT * FROM settings WHERE tenant_id = $1', [tenantId]);
   const settings = st[0] || { auto_create_leads: true, entry_stage: 'novo', default_owner: '' };
   if (!settings.auto_create_leads) return { lead: null, created: false };
 
-  const phone = '+' + String(chatId).split('@')[0];
   const { rows } = await q(
     `INSERT INTO leads (tenant_id, name, phone, chat_id, stage, owner, origin)
-     VALUES ($1,$2,$3,$4,$5,$6,'WhatsApp') RETURNING *`,
-    [tenantId, pushName || null, phone, chatId, settings.entry_stage, settings.default_owner || '']
+     VALUES ($1,$2,$3,$4,$5,$6,'WhatsApp')
+     ON CONFLICT (tenant_id, chat_id) WHERE chat_id IS NOT NULL DO NOTHING
+     RETURNING *`,
+    [tenantId, pushName || null, phone || '', chatId, settings.entry_stage, settings.default_owner || '']
   );
-  return { lead: rows[0], created: true, stage: settings.entry_stage };
+  if (rows.length) return { lead: rows[0], created: true, stage: settings.entry_stage };
+  const { rows: again } = await find(); // outro evento criou ao mesmo tempo
+  return { lead: again[0] || null, created: false };
 }
 
 export async function touchLead(id) {

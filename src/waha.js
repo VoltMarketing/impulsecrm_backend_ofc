@@ -28,8 +28,10 @@ async function call(tenant, path, { method = 'GET', body, accept } = {}) {
     data = text;
   }
   if (!res.ok) {
-    const msg = (data && (data.message || data.error)) || `WAHA ${res.status}`;
-    throw new Error(typeof msg === 'string' ? msg : `WAHA ${res.status}`);
+    let msg = (data && (data.message || data.error)) || '';
+    if (Array.isArray(msg)) msg = msg.join('; ');
+    if (typeof msg !== 'string') msg = JSON.stringify(msg);
+    throw new Error(`WAHA ${res.status}${msg ? ': ' + msg : ''}`);
   }
   return data;
 }
@@ -46,19 +48,35 @@ function isOurs(w) {
   return String((w && w.url) || '').includes('/api/webhooks/waha/');
 }
 
+export const WEBHOOK_EVENTS = ['message.any', 'message.ack', 'session.status'];
+
 /** Garante que a sessão tem o webhook do CRM, mantendo os que já existem (n8n).
- *  Só mexe no WAHA se o webhook estiver faltando ou desatualizado. */
+ *  SEGURANÇA: nunca mexe numa sessão conectada (WORKING) — alterar a config faz o
+ *  WAHA reiniciar a sessão e, sem volume persistente, ela pode pedir QR de novo. */
 export async function ensureWebhook(tenant, existing) {
   const name = tenant.waha_session;
-  const ours = {
-    url: webhookUrl(tenant),
-    events: ['message', 'message.any', 'message.ack', 'session.status']
-  };
+  const ours = { url: webhookUrl(tenant), events: WEBHOOK_EVENTS };
   const info = existing || (await call(tenant, `/api/sessions/${name}`));
   const cfg = (info && info.config) || {};
   const hooks = cfg.webhooks || [];
   const current = hooks.find(isOurs);
-  if (current && current.url === ours.url) return false; // já está certo
+  const upToDate =
+    current &&
+    current.url === ours.url &&
+    JSON.stringify([...(current.events || [])].sort()) === JSON.stringify([...WEBHOOK_EVENTS].sort());
+  if (upToDate) {
+    console.log(`[waha] webhook OK na sessão "${name}" -> ${ours.url}`);
+    return false;
+  }
+
+  if (String(info.status || '').toUpperCase() === 'WORKING') {
+    console.error(
+      `[waha] ATENÇÃO: a sessão "${name}" está conectada mas o webhook do CRM está faltando/desatualizado. ` +
+        `Não vou mexer nela automaticamente para não derrubar o WhatsApp. ` +
+        `Adicione no dashboard do WAHA o webhook: ${ours.url} (eventos: ${WEBHOOK_EVENTS.join(', ')})`
+    );
+    return false;
+  }
 
   const others = hooks.filter((w) => !isOurs(w));
   await call(tenant, `/api/sessions/${name}`, {
@@ -66,15 +84,6 @@ export async function ensureWebhook(tenant, existing) {
     body: { name, config: { ...cfg, webhooks: [...others, ours] } }
   });
   console.log(`[waha] webhook do CRM cadastrado na sessão "${name}" -> ${ours.url}`);
-  // Reinicia a sessão para o WAHA passar a usar o webhook novo (mantém o login do WhatsApp)
-  if (String(info.status || '').toUpperCase() === 'WORKING') {
-    try {
-      await call(tenant, `/api/sessions/${name}/restart`, { method: 'POST' });
-      console.log(`[waha] sessão "${name}" reiniciada para aplicar o webhook`);
-    } catch (e) {
-      console.error('[waha] não consegui reiniciar a sessão:', e.message);
-    }
-  }
   return true;
 }
 
@@ -96,7 +105,7 @@ export async function ensureSession(tenant) {
       body: {
         name,
         start: true,
-        config: { webhooks: [{ url: webhookUrl(tenant), events: ['message', 'message.any', 'message.ack', 'session.status'] }] }
+        config: { webhooks: [{ url: webhookUrl(tenant), events: WEBHOOK_EVENTS }] }
       }
     });
     return;

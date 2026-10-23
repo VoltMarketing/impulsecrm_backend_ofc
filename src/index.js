@@ -1,3 +1,4 @@
+import './async-safe.js';
 import express from 'express';
 import cors from 'cors';
 import { readFile } from 'node:fs/promises';

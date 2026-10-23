@@ -172,7 +172,10 @@ router.post('/leads/:id/messages', requireAuth, async (req, res) => {
 
   const { rows: saved } = await q(
     `INSERT INTO messages (tenant_id, lead_id, client_id, wa_id, direction, sender, text, status)
-     VALUES ($1,$2,$3,$4,'out','human',$5,$6) RETURNING *`,
+     VALUES ($1,$2,$3,$4,'out','human',$5,$6)
+     ON CONFLICT (tenant_id, wa_id) WHERE wa_id IS NOT NULL
+       DO UPDATE SET sender = 'human', client_id = EXCLUDED.client_id
+     RETURNING *`,
     [req.tenantId, lead.id, clientId || null, waId ? String(waId) : null, text, status]
   );
   await touchLead(lead.id);
